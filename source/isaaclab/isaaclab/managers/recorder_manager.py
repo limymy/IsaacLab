@@ -122,6 +122,24 @@ class RecorderTerm(ManagerTermBase):
             Please refer to the `record_pre_reset` function for more details.
         """
         return None, None
+    
+    def record_pre_physics_step(self) -> tuple[str | None, torch.Tensor | dict | None]:
+        """Record data before the physics step.
+
+        Returns:
+            A tuple of key and value to be recorded.
+            Please refer to the `record_pre_reset` function for more details.
+        """
+        return None, None
+    
+    def record_post_physics_step(self) -> tuple[str | None, torch.Tensor | dict | None]:
+        """Record data after the physics step.
+
+        Returns:
+            A tuple of key and value to be recorded.
+            Please refer to the `record_pre_reset` function for more details.
+        """
+        return None, None
 
 
 class RecorderManager(ManagerBase):
@@ -362,6 +380,32 @@ class RecorderManager(ManagerBase):
             key, value = term.record_post_step()
             self.add_to_episodes(key, value)
 
+    def record_pre_physics_step(self, env_ids: torch.Tensor | None = None):
+        """Trigger recorder terms for pre-physics step functions."""
+        # Do nothing if no active recorder terms are provided
+        if len(self.active_terms) == 0:
+            return
+
+        # record data from all active terms that run at simulation rate
+        for term in self._terms.values():
+            # record data
+            key, value = term.record_pre_physics_step()
+            # add data to the buffer
+            self.add_to_episodes(key, value, env_ids)
+
+    def record_post_physics_step(self, env_ids: torch.Tensor | None = None):
+        """Trigger recorder terms for post-physics step functions."""
+        # Do nothing if no active recorder terms are provided
+        if len(self.active_terms) == 0:
+            return
+
+        # record data from all active terms that run at simulation rate
+        for term in self._terms.values():
+            # record data
+            key, value = term.record_post_physics_step()
+            # add data to the buffer
+            self.add_to_episodes(key, value, env_ids)
+
     def record_pre_reset(self, env_ids: Sequence[int] | None, force_export_or_skip=None) -> None:
         """Trigger recorder terms for pre-reset functions.
 
@@ -382,7 +426,7 @@ class RecorderManager(ManagerBase):
             self.add_to_episodes(key, value, env_ids)
 
         # Set task success values for the relevant episodes
-        success_results = torch.zeros(len(env_ids), dtype=bool, device=self._env.device)
+        success_results = torch.zeros(len(env_ids), dtype=torch.bool, device=self._env.device)
         # Check success indicator from termination terms
         if hasattr(self._env, "termination_manager"):
             if "success" in self._env.termination_manager.active_terms:

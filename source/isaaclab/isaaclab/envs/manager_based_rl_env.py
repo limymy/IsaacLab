@@ -186,8 +186,14 @@ class ManagerBasedRLEnv(ManagerBasedEnv, gym.Env):
             self.action_manager.apply_action()
             # set actions into simulator
             self.scene.write_data_to_sim()
+            # trigger recorder terms for pre-physics step calls
+            if self.recorder_manager:
+                self.recorder_manager.record_pre_physics_step()
             # simulate
             self.sim.step(render=False)
+            # trigger recorder terms for post-physics step calls
+            if self.recorder_manager:
+                self.recorder_manager.record_post_physics_step()
             # render between steps only if the GUI or an RTX sensor needs it
             # note: we assume the render interval to be the shortest accepted rendering interval.
             #    If a camera needs rendering at a faster frequency, this will lead to unexpected behavior.
