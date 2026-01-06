@@ -136,6 +136,34 @@ def velocity_projector_inv(
     return wp.spatial_vector(u, w, dtype=wp.float32)
 
 
+@wp.func
+def acceleration_projector(
+    com_acc: wp.spatial_vectorf,
+    com_velocity: wp.spatial_vectorf,
+    link_pose: wp.transformf,
+    com_position: wp.vec3f,
+) -> wp.spatial_vectorf:
+    """
+    Project a spatial acceleration from the com frame to the link frame.
+
+    This shifts the linear acceleration from the center of mass point to the link origin using:
+
+        a_O = a_C + alpha x r_CO + omega x (omega x r_CO)
+
+    where r_CO is the vector from the center of mass to the link origin (in world frame).
+
+    .. note:: Only :arg:`com_position` is needed as in Newton, the CoM orientation is always aligned with the link frame.
+    """
+    # Vector from COM to link origin (world frame)
+    r_co_w = wp.quat_rotate(wp.transform_get_rotation(link_pose), -com_position)
+    omega_w = wp.spatial_bottom(com_velocity)
+    alpha_w = wp.spatial_bottom(com_acc)
+    a_com_w = wp.spatial_top(com_acc)
+
+    a_link_w = a_com_w + wp.cross(alpha_w, r_co_w) + wp.cross(omega_w, wp.cross(omega_w, r_co_w))
+    return wp.spatial_vector(a_link_w, alpha_w, dtype=wp.float32)
+
+
 """
 Kernels to project velocities to and from the com frame
 """
@@ -294,6 +322,55 @@ def project_com_velocity_to_link_frame_root(
     """
     index = wp.tid()
     link_velocity[index] = velocity_projector(com_velocity[index], link_pose[index], com_position[index][0])
+
+
+@wp.kernel
+def project_com_acceleration_to_link_frame_batch(
+    com_acc: wp.array2d(dtype=wp.spatial_vectorf),
+    com_velocity: wp.array2d(dtype=wp.spatial_vectorf),
+    link_pose: wp.array2d(dtype=wp.transformf),
+    com_position: wp.array2d(dtype=wp.vec3f),
+    link_acc: wp.array2d(dtype=wp.spatial_vectorf),
+):
+    """
+    Project a spatial acceleration from the com frame to the link frame for all links.
+
+    Args:
+        com_acc: The com acceleration in the world frame. Shape is (num_instances, num_bodies, 6).
+        com_velocity: The com velocity in the world frame. Shape is (num_instances, num_bodies, 6).
+        link_pose: The link pose in the world frame. Shape is (num_instances, num_bodies, 7).
+        com_position: The com position in link frame. Shape is (num_instances, num_bodies, 3).
+        link_acc: The link acceleration in the world frame. Shape is (num_instances, num_bodies, 6). (modified)
+    """
+    env_idx, body_idx = wp.tid()
+    link_acc[env_idx, body_idx] = acceleration_projector(
+        com_acc[env_idx, body_idx],
+        com_velocity[env_idx, body_idx],
+        link_pose[env_idx, body_idx],
+        com_position[env_idx, body_idx],
+    )
+
+
+@wp.kernel
+def project_com_acceleration_to_link_frame_root(
+    com_acc: wp.array(dtype=wp.spatial_vectorf),
+    com_velocity: wp.array(dtype=wp.spatial_vectorf),
+    link_pose: wp.array(dtype=wp.transformf),
+    com_position: wp.array2d(dtype=wp.vec3f),
+    link_acc: wp.array(dtype=wp.spatial_vectorf),
+):
+    """
+    Project a spatial acceleration from the com frame to the link frame for the root link only.
+
+    Args:
+        com_acc: The root com acceleration in the world frame. Shape is (num_instances, 6).
+        com_velocity: The root com velocity in the world frame. Shape is (num_instances, 6).
+        link_pose: The root link pose in the world frame. Shape is (num_instances, 7).
+        com_position: The com position in link frame. Shape is (num_instances, num_bodies, 3).
+        link_acc: The root link acceleration. Shape is (num_instances, 6). (modified)
+    """
+    index = wp.tid()
+    link_acc[index] = acceleration_projector(com_acc[index], com_velocity[index], link_pose[index], com_position[index][0])
 
 
 @wp.kernel

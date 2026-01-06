@@ -80,11 +80,14 @@ class MockNewtonArticulationView:
         if is_fixed_base:
             self._root_velocities = None
             self._link_velocities = None
+            self._link_accelerations = None
         else:
             self._root_velocities = wp.zeros((num_instances,), dtype=wp.spatial_vectorf, device=device)
             self._link_velocities = wp.zeros((num_instances, num_bodies), dtype=wp.spatial_vectorf, device=device)
+            self._link_accelerations = wp.zeros((num_instances, num_bodies), dtype=wp.spatial_vectorf, device=device)
         self._dof_positions = wp.zeros((num_instances, num_joints), dtype=wp.float32, device=device)
         self._dof_velocities = wp.zeros((num_instances, num_joints), dtype=wp.float32, device=device)
+        self._dof_accelerations = wp.zeros((num_instances, num_joints), dtype=wp.float32, device=device)
 
         # Initialize default attributes
         self._attributes: dict = {}
@@ -172,11 +175,17 @@ class MockNewtonArticulationView:
     def get_link_velocities(self, state) -> wp.array:
         return self._link_velocities
 
+    def get_link_accelerations(self, state) -> wp.array:
+        return self._link_accelerations
+
     def get_dof_positions(self, state) -> wp.array:
         return self._dof_positions
 
     def get_dof_velocities(self, state) -> wp.array:
         return self._dof_velocities
+
+    def get_dof_accelerations(self, state) -> wp.array:
+        return self._dof_accelerations
 
     def get_attribute(self, name: str, model_or_state) -> wp.array:
         return self._attributes[name]
@@ -193,11 +202,13 @@ class MockNewtonArticulationView:
         self,
         root_transforms: wp.array | None = None,
         root_velocities: wp.array | None = None,
+        link_accelerations: wp.array | None = None,
         link_transforms: wp.array | None = None,
         link_velocities: wp.array | None = None,
         body_com_pos: wp.array | None = None,
         dof_positions: wp.array | None = None,
         dof_velocities: wp.array | None = None,
+        dof_accelerations: wp.array | None = None,
         body_mass: wp.array | None = None,
         body_inertia: wp.array | None = None,
         joint_limit_lower: wp.array | None = None,
@@ -237,6 +248,19 @@ class MockNewtonArticulationView:
             else:
                 self._link_velocities = link_velocities
 
+        if link_accelerations is None:
+            if self._link_accelerations is not None:
+                self._link_accelerations.assign(
+                    wp.zeros((self._count, self._link_count), dtype=wp.spatial_vectorf, device=self._device)
+                )
+            else:
+                self._link_accelerations = link_accelerations
+        else:
+            if self._link_accelerations is not None:
+                self._link_accelerations.assign(link_accelerations)
+            else:
+                self._link_accelerations = link_accelerations
+
         # Set attributes that ArticulationData expects
         if body_com_pos is None:
             self._attributes["body_com"].assign(
@@ -258,6 +282,13 @@ class MockNewtonArticulationView:
             )
         else:
             self._dof_velocities.assign(dof_velocities)
+
+        if dof_accelerations is None:
+            self._dof_accelerations.assign(
+                wp.zeros((self._count, self._joint_dof_count), dtype=wp.float32, device=self._device)
+            )
+        else:
+            self._dof_accelerations.assign(dof_accelerations)
 
         if body_mass is None:
             self._attributes["body_mass"].assign(
@@ -306,6 +337,10 @@ class MockNewtonArticulationView:
         # Generate random joint positions and velocities
         dof_pos = torch.rand((self._count, self._joint_dof_count), device=self._device) * 6.28 - 3.14
         dof_vel = torch.rand((self._count, self._joint_dof_count), device=self._device) * 2.0 - 1.0
+        dof_acc = torch.rand((self._count, self._joint_dof_count), device=self._device) * 2.0 - 1.0
+
+        # Generate random link accelerations
+        link_acc = torch.rand((self._count, self._link_count, 6), device=self._device) * 2.0 - 1.0
 
         # Generate random body masses (positive values)
         body_mass = torch.rand((self._count, self._link_count), device=self._device) * 10.0 + 0.1
@@ -316,9 +351,11 @@ class MockNewtonArticulationView:
             root_velocities=wp.from_torch(root_vel, dtype=wp.spatial_vectorf),
             link_transforms=wp.from_torch(link_pose, dtype=wp.transformf),
             link_velocities=wp.from_torch(link_vel, dtype=wp.spatial_vectorf),
+            link_accelerations=wp.from_torch(link_acc, dtype=wp.spatial_vectorf),
             body_com_pos=wp.from_torch(body_com_pos, dtype=wp.vec3f),
             dof_positions=wp.from_torch(dof_pos, dtype=wp.float32),
             dof_velocities=wp.from_torch(dof_vel, dtype=wp.float32),
+            dof_accelerations=wp.from_torch(dof_acc, dtype=wp.float32),
             body_mass=wp.from_torch(body_mass, dtype=wp.float32),
         )
 

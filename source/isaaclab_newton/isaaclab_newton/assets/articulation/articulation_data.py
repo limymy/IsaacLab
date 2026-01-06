@@ -19,6 +19,8 @@ from isaaclab_newton.kernels import (
     derive_joint_acceleration_from_velocity,
     generate_pose_from_position_with_unit_quaternion_batched,
     make_joint_pos_limits_from_lower_and_upper_limits,
+    project_com_acceleration_to_link_frame_batch,
+    project_com_acceleration_to_link_frame_root,
     project_com_velocity_to_link_frame_batch,
     project_com_velocity_to_link_frame_root,
     project_vec_from_pose_single,
@@ -558,6 +560,40 @@ class ArticulationData(BaseArticulationData):
         return self._root_link_vel_w.data
 
     @property
+    def root_link_acc_w(self) -> wp.array(dtype=wp.spatial_vectorf):
+        """Root link acceleration ``wp.spatial_vectorf`` in simulation world frame.
+
+        Shapes are (num_instances,). Accelerations are in the form of [ax, ay, az, alphax, alphay, alphaz].
+        This quantity contains the linear and angular accelerations of the articulation root's actor frame
+        relative to the world.
+        """
+        if self._root_link_acc_w.timestamp < self._sim_timestamp:
+            body_com_acc = self.body_com_acc_w
+            root_com_acc = wp.array(
+                ptr=body_com_acc.ptr,
+                dtype=wp.spatial_vectorf,
+                shape=(self._root_view.count,),
+                strides=(body_com_acc.strides[0],),
+                device=self.device,
+            )
+            wp.launch(
+                project_com_acceleration_to_link_frame_root,
+                dim=(self._root_view.count),
+                device=self.device,
+                inputs=[
+                    root_com_acc,
+                    self._sim_bind_root_com_vel_w,
+                    self._sim_bind_root_link_pose_w,
+                    self._sim_bind_body_com_pos_b,
+                    self._root_link_acc_w.data,
+                ],
+            )
+            # set the buffer data and timestamp
+            self._root_link_acc_w.timestamp = self._sim_timestamp
+
+        return self._root_link_acc_w.data
+
+    @property
     def root_com_pose_w(self) -> wp.array(dtype=wp.transformf):
         """Root center of mass pose ``wp.transformf`` in simulation world frame.
 
@@ -731,6 +767,32 @@ class ArticulationData(BaseArticulationData):
         return self._body_link_vel_w.data
 
     @property
+    def body_link_acc_w(self) -> wp.array(dtype=wp.spatial_vectorf):
+        """Body link acceleration ``wp.spatial_vectorf`` in simulation world frame.
+
+        Shapes are (num_instances, num_bodies,). Accelerations are in the form of [ax, ay, az, alphax, alphay, alphaz].
+        This quantity contains the linear and angular accelerations of the articulation links' actor frame
+        relative to the world.
+        """
+        if self._body_link_acc_w.timestamp < self._sim_timestamp:
+            # Project the acceleration from the center of mass frame to the link frame
+            wp.launch(
+                project_com_acceleration_to_link_frame_batch,
+                dim=(self._root_view.count, self._root_view.link_count),
+                device=self.device,
+                inputs=[
+                    self.body_com_acc_w,
+                    self._sim_bind_body_com_vel_w,
+                    self._sim_bind_body_link_pose_w,
+                    self._sim_bind_body_com_pos_b,
+                    self._body_link_acc_w.data,
+                ],
+            )
+            # set the buffer data and timestamp
+            self._body_link_acc_w.timestamp = self._sim_timestamp
+        return self._body_link_acc_w.data
+
+    @property
     def body_com_pose_w(self) -> wp.array(dtype=wp.transformf):
         """Body center of mass pose ``wp.transformf`` in simulation world frame.
 
@@ -857,6 +919,8 @@ class ArticulationData(BaseArticulationData):
         Shapes are (num_instances, num_bodies,). The acceleration is in the form of [vx, vy, vz, wx, wy, wz].
         All values are relative to the world.
         """
+        if self._sim_bind_body_com_acc_w is not None:
+            return self._sim_bind_body_com_acc_w
         if self._body_com_acc_w.timestamp < self._sim_timestamp:
             wp.launch(
                 derive_body_acceleration_from_velocity_batched,
@@ -923,6 +987,8 @@ class ArticulationData(BaseArticulationData):
     @property
     def joint_acc(self) -> wp.array(dtype=wp.float32):
         """Joint acceleration of all joints. Shape is (num_instances, num_joints)."""
+        if self._sim_bind_joint_acc is not None:
+            return self._sim_bind_joint_acc
         if self._joint_acc.timestamp < self._sim_timestamp:
             # note: we use finite differencing to compute acceleration
             wp.launch(
@@ -1006,6 +1072,27 @@ class ArticulationData(BaseArticulationData):
             # set the buffer data and timestamp
             self._root_link_vel_b.timestamp = self._sim_timestamp
         return self._root_link_vel_b.data
+
+    @property
+    def root_link_acc_b(self) -> wp.array(dtype=wp.spatial_vectorf):
+        """Root link acceleration ``wp.spatial_vectorf`` in base frame. Shape is (num_instances).
+
+        Acceleration is provided in the form of [ax, ay, az, alphax, alphay, alphaz].
+        """
+        if self._root_link_acc_b.timestamp < self._sim_timestamp:
+            wp.launch(
+                project_velocities_to_frame,
+                dim=self._root_view.count,
+                device=self.device,
+                inputs=[
+                    self.root_link_acc_w,
+                    self._sim_bind_root_link_pose_w,
+                    self._root_link_acc_b.data,
+                ],
+            )
+            # set the buffer data and timestamp
+            self._root_link_acc_b.timestamp = self._sim_timestamp
+        return self._root_link_acc_b.data
 
     @property
     def root_com_vel_b(self) -> wp.array(dtype=wp.spatial_vectorf):
@@ -1113,6 +1200,84 @@ class ArticulationData(BaseArticulationData):
                 ],
             )
         return self._root_link_ang_vel_b
+
+    @property
+    @warn_overhead_cost(
+        "root_link_acc_b",
+        "Launches a kernel to split the spatial acceleration array to a linear acceleration array. Consider using the"
+        " spatial acceleration array directly instead.",
+    )
+    def root_link_lin_acc_b(self) -> wp.array(dtype=wp.vec3f):
+        """Root link linear acceleration in base frame. Shape is (num_instances, 3)."""
+        # Call the lazy buffer to make sure it is up to date
+        data = self.root_link_acc_b
+
+        # Initialize the buffer if it is not already initialized
+        if self._root_link_lin_acc_b is None:
+            if data.is_contiguous:
+                # Create a memory view of the data
+                self._root_link_lin_acc_b = wp.array(
+                    ptr=data.ptr,
+                    dtype=wp.vec3f,
+                    shape=data.shape,
+                    strides=data.strides,
+                    device=self.device,
+                )
+            else:
+                # Create a new buffer
+                self._root_link_lin_acc_b = wp.zeros((self._root_view.count,), dtype=wp.vec3f, device=self.device)
+
+        # If the data is not contiguous, we need to launch a kernel to update the buffer
+        if not data.is_contiguous:
+            wp.launch(
+                split_spatial_vectory_array_to_linear_velocity_array,
+                dim=self._root_view.count,
+                device=self.device,
+                inputs=[
+                    data,
+                    self._root_link_lin_acc_b,
+                ],
+            )
+        return self._root_link_lin_acc_b
+
+    @property
+    @warn_overhead_cost(
+        "root_link_acc_b",
+        "Launches a kernel to split the spatial acceleration array to an angular acceleration array. Consider using the"
+        " spatial acceleration array directly instead.",
+    )
+    def root_link_ang_acc_b(self) -> wp.array(dtype=wp.vec3f):
+        """Root link angular acceleration in base frame. Shape is (num_instances, 3)."""
+        # Call the lazy buffer to make sure it is up to date
+        data = self.root_link_acc_b
+
+        # Initialize the buffer if it is not already initialized
+        if self._root_link_ang_acc_b is None:
+            if data.is_contiguous:
+                # Create a memory view of the data
+                self._root_link_ang_acc_b = wp.array(
+                    ptr=data.ptr + 3 * 4,
+                    dtype=wp.vec3f,
+                    shape=data.shape,
+                    strides=data.strides,
+                    device=self.device,
+                )
+            else:
+                # Create a new buffer
+                self._root_link_ang_acc_b = wp.zeros((self._root_view.count,), dtype=wp.vec3f, device=self.device)
+
+        # If the data is not contiguous, we need to launch a kernel to update the buffer
+        if not data.is_contiguous:
+            wp.launch(
+                split_spatial_vectory_array_to_angular_velocity_array,
+                dim=self._root_view.count,
+                device=self.device,
+                inputs=[
+                    data,
+                    self._root_link_ang_acc_b,
+                ],
+            )
+        return self._root_link_ang_acc_b
 
     @property
     @warn_overhead_cost(
@@ -1368,6 +1533,84 @@ class ArticulationData(BaseArticulationData):
                 ],
             )
         return self._root_link_ang_vel_w
+
+    @property
+    @warn_overhead_cost(
+        "root_link_acc_w",
+        "Launches a kernel to split the spatial acceleration array to a linear acceleration array. Consider using the"
+        " spatial acceleration array directly instead.",
+    )
+    def root_link_lin_acc_w(self) -> wp.array(dtype=wp.vec3f):
+        """Root linear acceleration ``wp.vec3f`` in simulation world frame. Shape is (num_instances)."""
+        # Call the lazy buffer to make sure it is up to date
+        data = self.root_link_acc_w
+
+        # Initialize the buffer if it is not already initialized
+        if self._root_link_lin_acc_w is None:
+            if data.is_contiguous:
+                # Create a memory view of the data
+                self._root_link_lin_acc_w = wp.array(
+                    ptr=data.ptr,
+                    dtype=wp.vec3f,
+                    shape=data.shape,
+                    strides=data.strides,
+                    device=self.device,
+                )
+            else:
+                # Create a new buffer
+                self._root_link_lin_acc_w = wp.zeros((self._root_view.count,), dtype=wp.vec3f, device=self.device)
+
+        # If the data is not contiguous, we need to launch a kernel to update the buffer
+        if not data.is_contiguous:
+            wp.launch(
+                split_spatial_vectory_array_to_linear_velocity_array,
+                dim=self._root_view.count,
+                device=self.device,
+                inputs=[
+                    data,
+                    self._root_link_lin_acc_w,
+                ],
+            )
+        return self._root_link_lin_acc_w
+
+    @property
+    @warn_overhead_cost(
+        "root_link_acc_w",
+        "Launches a kernel to split the spatial acceleration array to an angular acceleration array. Consider using the"
+        " spatial acceleration array directly instead.",
+    )
+    def root_link_ang_acc_w(self) -> wp.array(dtype=wp.vec3f):
+        """Root angular acceleration ``wp.vec3f`` in simulation world frame. Shape is (num_instances)."""
+        # Call the lazy buffer to make sure it is up to date
+        data = self.root_link_acc_w
+
+        # Initialize the buffer if it is not already initialized
+        if self._root_link_ang_acc_w is None:
+            if data.is_contiguous:
+                # Create a memory view of the data
+                self._root_link_ang_acc_w = wp.array(
+                    ptr=data.ptr + 3 * 4,
+                    dtype=wp.vec3f,
+                    shape=data.shape,
+                    strides=data.strides,
+                    device=self.device,
+                )
+            else:
+                # Create a new buffer
+                self._root_link_ang_acc_w = wp.zeros((self._root_view.count), dtype=wp.vec3f, device=self.device)
+
+        # If the data is not contiguous, we need to launch a kernel to update the buffer
+        if not data.is_contiguous:
+            wp.launch(
+                split_spatial_vectory_array_to_angular_velocity_array,
+                dim=self._root_view.count,
+                device=self.device,
+                inputs=[
+                    data,
+                    self._root_link_ang_acc_w,
+                ],
+            )
+        return self._root_link_ang_acc_w
 
     @property
     @warn_overhead_cost(
@@ -1688,6 +1931,80 @@ class ArticulationData(BaseArticulationData):
                 ],
             )
         return self._body_link_ang_vel_w
+
+    @property
+    @warn_overhead_cost(
+        "body_link_acc_w",
+        "Launches a kernel to split the acceleration array to a linear acceleration array. In a graph-based pipeline,"
+        " consider using the acceleration array directly instead.",
+    )
+    def body_link_lin_acc_w(self) -> wp.array(dtype=wp.vec3f):
+        """Linear acceleration ``wp.vec3f`` of all bodies in simulation world frame. Shape is (num_instances, num_bodies)."""
+        # Call the lazy buffer to make sure it is up to date
+        data = self.body_link_acc_w
+
+        # Initialize the buffer if it is not already initialized
+        if self._body_link_lin_acc_w is None:
+            if data.is_contiguous:
+                # Create a memory view of the data
+                self._body_link_lin_acc_w = wp.array(
+                    ptr=data.ptr, dtype=wp.vec3f, shape=data.shape, strides=data.strides, device=self.device
+                )
+            else:
+                # Create a new buffer
+                self._body_link_lin_acc_w = wp.zeros(
+                    (self._root_view.count, self._root_view.link_count), dtype=wp.vec3f, device=self.device
+                )
+
+        # If the data is not contiguous, we need to launch a kernel to update the buffer
+        if not data.is_contiguous:
+            wp.launch(
+                split_spatial_vectory_batched_array_to_linear_velocity_batched_array,
+                dim=(self._root_view.count, self._root_view.link_count),
+                device=self.device,
+                inputs=[
+                    data,
+                    self._body_link_lin_acc_w,
+                ],
+            )
+        return self._body_link_lin_acc_w
+
+    @property
+    @warn_overhead_cost(
+        "body_link_acc_w",
+        "Launches a kernel to split the acceleration array to an angular acceleration array. In a graph-based pipeline,"
+        " consider using the acceleration array directly instead.",
+    )
+    def body_link_ang_acc_w(self) -> wp.array(dtype=wp.vec3f):
+        """Angular acceleration ``wp.vec3f`` of all bodies in simulation world frame. Shape is (num_instances, num_bodies)."""
+        # Call the lazy buffer to make sure it is up to date
+        data = self.body_link_acc_w
+
+        # Initialize the buffer if it is not already initialized
+        if self._body_link_ang_acc_w is None:
+            if data.is_contiguous:
+                # Create a memory view of the data
+                self._body_link_ang_acc_w = wp.array(
+                    ptr=data.ptr + 3 * 4, dtype=wp.vec3f, shape=data.shape, strides=data.strides, device=self.device
+                )
+            else:
+                # Create a new buffer
+                self._body_link_ang_acc_w = wp.zeros(
+                    (self._root_view.count, self._root_view.link_count), dtype=wp.vec3f, device=self.device
+                )
+
+        # If the data is not contiguous, we need to launch a kernel to update the buffer
+        if not data.is_contiguous:
+            wp.launch(
+                split_spatial_vectory_batched_array_to_angular_velocity_batched_array,
+                dim=(self._root_view.count, self._root_view.link_count),
+                device=self.device,
+                inputs=[
+                    data,
+                    self._body_link_ang_acc_w,
+                ],
+            )
+        return self._body_link_ang_acc_w
 
     @property
     @warn_overhead_cost(
@@ -2177,6 +2494,19 @@ class ArticulationData(BaseArticulationData):
         self._sim_bind_body_com_pos_b = self._root_view.get_attribute("body_com", NewtonManager.get_model())
         self._sim_bind_body_link_pose_w = self._root_view.get_link_transforms(NewtonManager.get_state_0())
         self._sim_bind_body_com_vel_w = self._root_view.get_link_velocities(NewtonManager.get_state_0())
+        # -- accelerations (optional; available in newer versions of Newton)
+        self._sim_bind_body_com_acc_w = None
+        self._sim_bind_joint_acc = None
+        try:
+            if hasattr(self._root_view, "get_link_accelerations"):
+                self._sim_bind_body_com_acc_w = self._root_view.get_link_accelerations(NewtonManager.get_state_0())
+        except Exception:
+            self._sim_bind_body_com_acc_w = None
+        try:
+            if hasattr(self._root_view, "get_dof_accelerations"):
+                self._sim_bind_joint_acc = self._root_view.get_dof_accelerations(NewtonManager.get_state_0())
+        except Exception:
+            self._sim_bind_joint_acc = None
         self._sim_bind_body_mass = self._root_view.get_attribute("body_mass", NewtonManager.get_model())
         self._sim_bind_body_inertia = self._root_view.get_attribute("body_inertia", NewtonManager.get_model())
         self._sim_bind_body_external_wrench = self._root_view.get_attribute("body_f", NewtonManager.get_state_0())
@@ -2267,9 +2597,14 @@ class ArticulationData(BaseArticulationData):
         # -- link frame w.r.t. world frame
         self._root_link_vel_w = TimestampedWarpBuffer(shape=(n_view,), dtype=wp.spatial_vectorf, device=self.device)
         self._root_link_vel_b = TimestampedWarpBuffer(shape=(n_view,), dtype=wp.spatial_vectorf, device=self.device)
+        self._root_link_acc_w = TimestampedWarpBuffer(shape=(n_view,), dtype=wp.spatial_vectorf, device=self.device)
+        self._root_link_acc_b = TimestampedWarpBuffer(shape=(n_view,), dtype=wp.spatial_vectorf, device=self.device)
         self._projected_gravity_b = TimestampedWarpBuffer(shape=(n_view,), dtype=wp.vec3f, device=self.device)
         self._heading_w = TimestampedWarpBuffer(shape=(n_view,), dtype=wp.float32, device=self.device)
         self._body_link_vel_w = TimestampedWarpBuffer(
+            shape=(n_view, n_link), dtype=wp.spatial_vectorf, device=self.device
+        )
+        self._body_link_acc_w = TimestampedWarpBuffer(
             shape=(n_view, n_link), dtype=wp.spatial_vectorf, device=self.device
         )
         # -- com frame w.r.t. world frame
@@ -2291,12 +2626,16 @@ class ArticulationData(BaseArticulationData):
         self._body_com_quat_b = None
         self._root_link_lin_vel_b = None
         self._root_link_ang_vel_b = None
+        self._root_link_lin_acc_b = None
+        self._root_link_ang_acc_b = None
         self._root_com_lin_vel_b = None
         self._root_com_ang_vel_b = None
         self._root_link_pos_w = None
         self._root_link_quat_w = None
         self._root_link_lin_vel_w = None
         self._root_link_ang_vel_w = None
+        self._root_link_lin_acc_w = None
+        self._root_link_ang_acc_w = None
         self._root_com_pos_w = None
         self._root_com_quat_w = None
         self._root_com_lin_vel_w = None
@@ -2305,6 +2644,8 @@ class ArticulationData(BaseArticulationData):
         self._body_link_quat_w = None
         self._body_link_lin_vel_w = None
         self._body_link_ang_vel_w = None
+        self._body_link_lin_acc_w = None
+        self._body_link_ang_acc_w = None
         self._body_com_pos_w = None
         self._body_com_quat_w = None
         self._body_com_lin_vel_w = None

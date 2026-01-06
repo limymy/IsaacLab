@@ -1553,6 +1553,74 @@ class TestBodyLinkVelW:
         assert not torch.all(wp.to_torch(articulation_data.body_link_vel_w) == value)
 
 
+class TestBodyLinkAccW:
+    """Tests the body link acceleration property.
+
+    This value is derived from body COM kinematics (acceleration, angular acceleration, angular velocity) and COM offset.
+
+    Runs the following checks:
+    - Checks that the returned value has the correct type and shape.
+    - Checks that the returned value is correctly computed.
+    """
+
+    def _setup_method(
+        self, num_instances: int, num_bodies: int, device: str
+    ) -> tuple[ArticulationData, MockNewtonArticulationView]:
+        mock_view = MockNewtonArticulationView(num_instances, num_bodies, 1, device)
+        mock_view.set_mock_data()
+
+        articulation_data = ArticulationData(
+            mock_view,
+            device,
+        )
+        return articulation_data, mock_view
+
+    @pytest.mark.parametrize("num_instances", [1, 2])
+    @pytest.mark.parametrize("num_bodies", [1, 3])
+    @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+    def test_correctness(self, mock_newton_manager, num_instances: int, num_bodies: int, device: str):
+        """Test that body_link_acc_w is correctly computed from COM kinematics."""
+        articulation_data, mock_view = self._setup_method(num_instances, num_bodies, device)
+
+        # Check the type and shape
+        assert articulation_data.body_link_acc_w.shape == (num_instances, num_bodies)
+        assert articulation_data.body_link_acc_w.dtype == wp.spatial_vectorf
+
+        for i in range(5):
+            articulation_data._sim_timestamp = i + 1.0
+
+            # Generate random COM velocity, COM acceleration, and body COM position
+            com_vel = torch.rand((num_instances, num_bodies, 6), device=device)
+            com_acc = torch.rand((num_instances, num_bodies, 6), device=device)
+            body_com_pos = torch.rand((num_instances, num_bodies, 3), device=device)
+
+            # Generate random link poses with normalized quaternions
+            link_pose = torch.zeros((num_instances, num_bodies, 7), device=device)
+            link_pose[..., :3] = torch.rand((num_instances, num_bodies, 3), device=device)
+            link_pose[..., 3:] = torch.randn((num_instances, num_bodies, 4), device=device)
+            link_pose[..., 3:] = torch.nn.functional.normalize(link_pose[..., 3:], p=2.0, dim=-1, eps=1e-12)
+
+            mock_view.set_mock_data(
+                link_transforms=wp.from_torch(link_pose, dtype=wp.transformf),
+                link_velocities=wp.from_torch(com_vel, dtype=wp.spatial_vectorf),
+                link_accelerations=wp.from_torch(com_acc, dtype=wp.spatial_vectorf),
+                body_com_pos=wp.from_torch(body_com_pos, dtype=wp.vec3f),
+            )
+
+            r_co_w = math_utils.quat_apply(link_pose[..., 3:], -body_com_pos)
+            omega_w = com_vel[..., 3:]
+            alpha_w = com_acc[..., 3:]
+
+            expected_lin_acc = (
+                com_acc[..., :3]
+                + torch.linalg.cross(alpha_w, r_co_w, dim=-1)
+                + torch.linalg.cross(omega_w, torch.linalg.cross(omega_w, r_co_w, dim=-1), dim=-1)
+            )
+            expected_acc = torch.cat([expected_lin_acc, alpha_w], dim=-1)
+
+            assert torch.allclose(wp.to_torch(articulation_data.body_link_acc_w), expected_acc, atol=1e-6, rtol=1e-6)
+
+
 class TestBodyComPoseW:
     """Tests the body center of mass pose property.
 
@@ -1812,23 +1880,22 @@ class TestBodyState:
 class TestBodyComAccW:
     """Tests the body center of mass acceleration property.
 
-    This value is derived from velocity finite differencing: (current_vel - previous_vel) / dt
+    This value is read directly from the simulation (Newton provides accelerations via state/model attributes).
 
     Runs the following checks:
     - Checks that the returned value has the correct type and shape.
-    - Checks that the returned value is correctly computed.
-    - Checks that the timestamp is updated correctly.
+    - Checks that the returned value matches simulation data.
     """
 
     def _setup_method(
-        self, num_instances: int, num_bodies: int, device: str, initial_vel: torch.Tensor | None = None
+        self, num_instances: int, num_bodies: int, device: str, initial_acc: torch.Tensor | None = None
     ) -> tuple[ArticulationData, MockNewtonArticulationView]:
         mock_view = MockNewtonArticulationView(num_instances, num_bodies, 1, device)
 
-        # Set initial velocities (these become _previous_body_com_vel)
-        if initial_vel is not None:
+        # Set initial accelerations (simulation binding)
+        if initial_acc is not None:
             mock_view.set_mock_data(
-                link_velocities=wp.from_torch(initial_vel, dtype=wp.spatial_vectorf),
+                link_accelerations=wp.from_torch(initial_acc, dtype=wp.spatial_vectorf),
             )
         else:
             mock_view.set_mock_data()
@@ -1843,66 +1910,40 @@ class TestBodyComAccW:
     @pytest.mark.parametrize("num_bodies", [1, 3])
     @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
     def test_correctness(self, mock_newton_manager, num_instances: int, num_bodies: int, device: str):
-        """Test that body_com_acc_w is correctly computed from velocity finite differencing."""
-        # Initial velocity (becomes previous_velocity)
-        previous_vel = torch.rand((num_instances, num_bodies, 6), device=device)
-        articulation_data, mock_view = self._setup_method(num_instances, num_bodies, device, previous_vel)
+        """Test that body_com_acc_w matches simulation accelerations."""
+        # Initial acceleration
+        initial_acc = torch.rand((num_instances, num_bodies, 6), device=device)
+        articulation_data, mock_view = self._setup_method(num_instances, num_bodies, device, initial_acc)
 
         # Check the type and shape
         assert articulation_data.body_com_acc_w.shape == (num_instances, num_bodies)
         assert articulation_data.body_com_acc_w.dtype == wp.spatial_vectorf
 
-        # dt is mocked as 0.01
-        dt = 0.01
-
         for i in range(10):
             articulation_data._sim_timestamp = i + 1.0
 
-            # Generate new random velocity
-            current_vel = torch.rand((num_instances, num_bodies, 6), device=device)
+            # Generate new random acceleration
+            current_acc = torch.rand((num_instances, num_bodies, 6), device=device)
             mock_view.set_mock_data(
-                link_velocities=wp.from_torch(current_vel, dtype=wp.spatial_vectorf),
+                link_accelerations=wp.from_torch(current_acc, dtype=wp.spatial_vectorf),
             )
 
-            # Compute expected acceleration: (current - previous) / dt
-            expected_acc = (current_vel - previous_vel) / dt
-
-            # Compare the computed value
-            assert torch.allclose(wp.to_torch(articulation_data.body_com_acc_w), expected_acc, atol=1e-5, rtol=1e-5)
-            # Update previous velocity
-            previous_vel = current_vel.clone()
+            # Compare the returned value
+            assert torch.allclose(wp.to_torch(articulation_data.body_com_acc_w), current_acc, atol=1e-6, rtol=1e-6)
 
     @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
     def test_timestamp_invalidation(self, mock_newton_manager, device: str):
-        """Test that data is invalidated when timestamp is updated."""
-        initial_vel = torch.zeros((1, 1, 6), device=device)
-        articulation_data, mock_view = self._setup_method(1, 1, device, initial_vel)
+        """Test that body_com_acc_w reflects simulation changes."""
+        initial_acc = torch.zeros((1, 1, 6), device=device)
+        articulation_data, mock_view = self._setup_method(1, 1, device, initial_acc)
 
-        # Check initial timestamp
-        assert articulation_data._body_com_acc_w.timestamp == -1.0
-        assert articulation_data._sim_timestamp == 0.0
-
-        # Request the property to trigger computation
         value = wp.to_torch(articulation_data.body_com_acc_w).clone()
 
-        # Check that buffer timestamp matches sim timestamp
-        assert articulation_data._body_com_acc_w.timestamp == articulation_data._sim_timestamp
-
-        # Update mock data without changing sim timestamp
+        # Update mock data without changing sim timestamp - value should update (direct binding)
         mock_view.set_mock_data(
-            link_velocities=wp.from_torch(torch.rand((1, 1, 6), device=device), dtype=wp.spatial_vectorf),
+            link_accelerations=wp.from_torch(torch.rand((1, 1, 6), device=device), dtype=wp.spatial_vectorf),
         )
 
-        # Value should NOT change (cached)
-        assert torch.all(wp.to_torch(articulation_data.body_com_acc_w) == value)
-
-        # Update sim timestamp
-        articulation_data._sim_timestamp = 1.0
-
-        # Buffer timestamp should now be stale
-        assert articulation_data._body_com_acc_w.timestamp != articulation_data._sim_timestamp
-
-        # Value should now be recomputed (different from cached)
         assert not torch.all(wp.to_torch(articulation_data.body_com_acc_w) == value)
 
 
@@ -2086,23 +2127,22 @@ class TestJointPosVel:
 class TestJointAcc:
     """Tests the joint acceleration property.
 
-    This value is derived from velocity finite differencing: (current_vel - previous_vel) / dt
+    This value is read directly from the simulation (Newton provides joint accelerations via state/model attributes).
 
     Runs the following checks:
     - Checks that the returned value has the correct type and shape.
-    - Checks that the returned value is correctly computed.
-    - Checks that the timestamp is updated correctly.
+    - Checks that the returned value matches simulation data.
     """
 
     def _setup_method(
-        self, num_instances: int, num_joints: int, device: str, initial_vel: torch.Tensor | None = None
+        self, num_instances: int, num_joints: int, device: str, initial_acc: torch.Tensor | None = None
     ) -> tuple[ArticulationData, MockNewtonArticulationView]:
         mock_view = MockNewtonArticulationView(num_instances, 1, num_joints, device)
 
-        # Set initial velocities (these become _previous_joint_vel)
-        if initial_vel is not None:
+        # Set initial accelerations (simulation binding)
+        if initial_acc is not None:
             mock_view.set_mock_data(
-                dof_velocities=wp.from_torch(initial_vel, dtype=wp.float32),
+                dof_accelerations=wp.from_torch(initial_acc, dtype=wp.float32),
             )
         else:
             mock_view.set_mock_data()
@@ -2117,66 +2157,40 @@ class TestJointAcc:
     @pytest.mark.parametrize("num_joints", [1, 6])
     @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
     def test_correctness(self, mock_newton_manager, num_instances: int, num_joints: int, device: str):
-        """Test that joint_acc is correctly computed from velocity finite differencing."""
-        # Initial velocity (becomes previous_velocity)
-        previous_vel = torch.rand((num_instances, num_joints), device=device)
-        articulation_data, mock_view = self._setup_method(num_instances, num_joints, device, previous_vel)
+        """Test that joint_acc matches simulation accelerations."""
+        # Initial acceleration
+        initial_acc = torch.rand((num_instances, num_joints), device=device)
+        articulation_data, mock_view = self._setup_method(num_instances, num_joints, device, initial_acc)
 
         # Check the type and shape
         assert articulation_data.joint_acc.shape == (num_instances, num_joints)
         assert articulation_data.joint_acc.dtype == wp.float32
 
-        # dt is mocked as 0.01
-        dt = 0.01
-
         for i in range(5):
             articulation_data._sim_timestamp = i + 1.0
 
-            # Generate new random velocity
-            current_vel = torch.rand((num_instances, num_joints), device=device)
+            # Generate new random acceleration
+            current_acc = torch.rand((num_instances, num_joints), device=device)
             mock_view.set_mock_data(
-                dof_velocities=wp.from_torch(current_vel, dtype=wp.float32),
+                dof_accelerations=wp.from_torch(current_acc, dtype=wp.float32),
             )
 
-            # Compute expected acceleration: (current - previous) / dt
-            expected_acc = (current_vel - previous_vel) / dt
-
-            # Compare the computed value
-            assert torch.allclose(wp.to_torch(articulation_data.joint_acc), expected_acc, atol=1e-5, rtol=1e-5)
-            # Update previous velocity
-            previous_vel = current_vel.clone()
+            # Compare the returned value
+            assert torch.allclose(wp.to_torch(articulation_data.joint_acc), current_acc, atol=1e-6, rtol=1e-6)
 
     @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
     def test_timestamp_invalidation(self, mock_newton_manager, device: str):
-        """Test that data is invalidated when timestamp is updated."""
-        initial_vel = torch.zeros((1, 1), device=device)
-        articulation_data, mock_view = self._setup_method(1, 1, device, initial_vel)
+        """Test that joint_acc reflects simulation changes."""
+        initial_acc = torch.zeros((1, 1), device=device)
+        articulation_data, mock_view = self._setup_method(1, 1, device, initial_acc)
 
-        # Check initial timestamp
-        assert articulation_data._joint_acc.timestamp == -1.0
-        assert articulation_data._sim_timestamp == 0.0
-
-        # Request the property to trigger computation
         value = wp.to_torch(articulation_data.joint_acc).clone()
 
-        # Check that buffer timestamp matches sim timestamp
-        assert articulation_data._joint_acc.timestamp == articulation_data._sim_timestamp
-
-        # Update mock data without changing sim timestamp
+        # Update mock data without changing sim timestamp - value should update (direct binding)
         mock_view.set_mock_data(
-            dof_velocities=wp.from_torch(torch.rand((1, 1), device=device), dtype=wp.float32),
+            dof_accelerations=wp.from_torch(torch.rand((1, 1), device=device), dtype=wp.float32),
         )
 
-        # Value should NOT change (cached)
-        assert torch.all(wp.to_torch(articulation_data.joint_acc) == value)
-
-        # Update sim timestamp
-        articulation_data._sim_timestamp = 1.0
-
-        # Buffer timestamp should now be stale
-        assert articulation_data._joint_acc.timestamp != articulation_data._sim_timestamp
-
-        # Value should now be recomputed (different from cached)
         assert not torch.all(wp.to_torch(articulation_data.joint_acc) == value)
 
 
