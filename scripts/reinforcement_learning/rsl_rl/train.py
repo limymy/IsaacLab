@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
@@ -32,6 +32,12 @@ parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
 )
 parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
+parser.add_argument(
+    "--timer",
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help="Enable Isaac Lab timers (use --no-timer to disable).",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -83,8 +89,8 @@ from rsl_rl.runners import DistillationRunner, OnPolicyRunner
 
 from isaaclab.utils.timer import Timer
 
-Timer.enable = False
-Timer.enable_display_output = False
+Timer.enable = args_cli.timer
+Timer.enable_display_output = args_cli.timer
 
 import isaaclab_tasks_experimental  # noqa: F401
 

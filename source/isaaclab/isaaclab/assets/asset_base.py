@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
@@ -14,6 +14,8 @@ import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
+
+import warp as wp
 
 import isaaclab.sim as sim_utils
 import isaaclab.sim.utils.prims as prim_utils
@@ -74,14 +76,11 @@ class AssetBase(ABC):
 
         # spawn the asset
         if self.cfg.spawn is not None:
-            # convert quaternion from xyzw (config) to wxyz (spawner expects)
-            rot = self.cfg.init_state.rot
-            orientation_wxyz = (rot[3], rot[0], rot[1], rot[2])
             self.cfg.spawn.func(
                 self.cfg.prim_path,
                 self.cfg.spawn,
                 translation=self.cfg.init_state.pos,
-                orientation=orientation_wxyz,
+                orientation=self.cfg.init_state.rot,  # xyzw format
             )
         # check that spawn was successful
         matching_prims = sim_utils.find_matching_prims(self.cfg.prim_path)
@@ -246,11 +245,12 @@ class AssetBase(ABC):
         return True
 
     @abstractmethod
-    def reset(self, env_ids: Sequence[int] | None = None):
+    def reset(self, env_ids: Sequence[int] | None = None, env_mask: wp.array | torch.Tensor | None = None):
         """Resets all internal buffers of selected environments.
 
         Args:
             env_ids: The indices of the object to reset. Defaults to None (all instances).
+            env_mask: The mask of the object to reset. Defaults to None (all instances).
         """
         raise NotImplementedError
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
@@ -17,14 +17,14 @@ if TYPE_CHECKING:
     from isaaclab_newton.assets.rigid_object import RigidObjectData as NewtonRigidObjectData
 
 
-class RigidObject(FactoryBase):
-    """Factory for creating articulation instances."""
+class RigidObject(FactoryBase, BaseRigidObject):
+    """Factory for creating rigid object instances."""
 
     data: BaseRigidObjectData | NewtonRigidObjectData
 
     def __new__(cls, *args, **kwargs) -> BaseRigidObject | NewtonRigidObject:
-        """Create a new instance of an articulation based on the backend."""
+        """Create a new instance of a rigid object based on the backend."""
         # The `FactoryBase` __new__ method will handle the logic and return
-        # an instance of the correct backend-specific articulation class,
+        # an instance of the correct backend-specific rigid object class,
         # which is guaranteed to be a subclass of `BaseArticulation` by convention.
         return super().__new__(cls, *args, **kwargs)

@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
@@ -36,7 +36,7 @@ class AntEnvCfg(DirectRLEnvCfg):
         ls_iterations=20,
         cone="pyramidal",
         ls_parallel=True,
-        integrator="implicit",
+        integrator="implicitfast",
         impratio=1,
     )
     newton_cfg = NewtonCfg(

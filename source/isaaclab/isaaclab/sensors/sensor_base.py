@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
@@ -55,9 +55,6 @@ class SensorBase(ABC):
         Args:
             cfg: The configuration parameters for the sensor.
         """
-        # check that config is valid
-        if cfg.history_length < 0:
-            raise ValueError(f"History length must be greater than 0! Received: {cfg.history_length}")
         # check that the config is valid
         cfg.validate()
         # store inputs
@@ -207,7 +204,8 @@ class SensorBase(ABC):
         """Resets the sensor internals.
 
         Args:
-            env_ids: The sensor ids to reset. Defaults to None.
+            env_ids: The sensor ids to reset. Defaults to None (all instances).
+            env_mask: The sensor mask to reset. Defaults to None (all instances).
         """
         # Resolve sensor ids
         if env_ids is None:

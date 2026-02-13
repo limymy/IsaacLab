@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
@@ -148,6 +148,7 @@ class ImplicitActuator(ActuatorBase):
                 self._env_mask,
                 self._joint_mask,
             ],
+            device=self._device,
         )
         self._clip_effort(self.data._computed_effort, self.data._applied_effort)
         # update the joint effort
@@ -160,6 +161,7 @@ class ImplicitActuator(ActuatorBase):
                 self._env_mask,
                 self._joint_mask,
             ],
+            device=self._device,
         )
 
 
@@ -220,6 +222,7 @@ class IdealPDActuator(ActuatorBase):
                 self._env_mask,
                 self._joint_mask,
             ],
+            device=self._device,
         )
         self._clip_effort(self.data._computed_effort, self.data._applied_effort)
         # update the joint effort
@@ -232,6 +235,7 @@ class IdealPDActuator(ActuatorBase):
                 self._env_mask,
                 self._joint_mask,
             ],
+            device=self._device,
         )
 
 
@@ -316,6 +320,7 @@ class DCMotor(IdealPDActuator):
                 self._env_mask,
                 self._joint_mask,
             ],
+            device=self._device,
         )
 
 

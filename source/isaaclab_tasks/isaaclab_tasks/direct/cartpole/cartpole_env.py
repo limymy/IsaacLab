@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
@@ -42,7 +42,7 @@ class CartpoleEnvCfg(DirectRLEnvCfg):
         cone="pyramidal",
         impratio=1,
         ls_parallel=True,
-        integrator="implicit",
+        integrator="implicitfast",
     )
 
     newton_cfg = NewtonCfg(

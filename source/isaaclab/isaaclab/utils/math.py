@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
@@ -942,7 +942,7 @@ def compute_pose_error(
     # Compute quaternion error (i.e., difference quaternion)
     # Reference: https://personal.utdallas.edu/~sxb027100/dock/quaternion.html
     # q_current_norm = q_current * q_current_conj
-    source_quat_norm = quat_mul(q01, quat_conjugate(q01))[:, 0]
+    source_quat_norm = quat_mul(q01, quat_conjugate(q01))[:, 3]
     # q_current_inv = q_current_conj / q_current_norm
     source_quat_inv = quat_conjugate(q01) / source_quat_norm.unsqueeze(-1)
     # q_error = q_target * q_current_inv

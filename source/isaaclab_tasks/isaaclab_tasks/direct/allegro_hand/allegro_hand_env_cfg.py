@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
@@ -32,7 +32,7 @@ class AllegroHandEnvCfg(DirectRLEnvCfg):
 
     solver_cfg = MJWarpSolverCfg(
         solver="newton",
-        integrator="implicit",
+        integrator="implicitfast",
         njmax=70,
         nconmax=70,
         impratio=10.0,

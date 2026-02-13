@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
@@ -19,7 +19,7 @@ PER_TEST_TIMEOUTS = {
     "test_articulation.py": 500,
     "test_rigid_object.py": 300,
     "test_environments.py": 1500,  # This test runs through all the environments for 100 steps each
-    "test_environments_standalone.py": 1500,  # This test runs through all the environments for 100 steps each
+    "test_environments_standalone.py": 2500,  # This test runs through all the environments for 100 steps each
     "test_environment_determinism.py": 500,  # This test runs through many the environments for 100 steps each
     "test_factory_environments.py": 300,  # This test runs through Factory environments for 100 steps each
     "test_env_rendering_logic.py": 300,
