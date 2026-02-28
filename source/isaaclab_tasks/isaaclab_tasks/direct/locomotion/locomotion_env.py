@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import torch
 
 import warp as wp
@@ -21,6 +22,19 @@ from isaaclab.utils.math import (
     quat_mul,
     scale_transform,
 )
+
+
+def _env_flag(name: str, default: int) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return bool(default)
+    try:
+        return bool(int(value))
+    except ValueError:
+        return bool(default)
+
+
+_ISAACLAB_INSTAB_LEGACY_TARGET_ANGLE = _env_flag("ISAACLAB_INSTAB_LEGACY_TARGET_ANGLE", default=0)
 
 
 def normalize_angle(x):
@@ -63,7 +77,12 @@ def compute_rot(
 
     roll, pitch, yaw = euler_xyz_from_quat(torso_quat)
 
-    walk_target_angle = torch.atan2(targets[:, 1] - torso_positions[:, 1], targets[:, 0] - torso_positions[:, 0])
+    dx = targets[:, 0] - torso_positions[:, 0]
+    dy = targets[:, 1] - torso_positions[:, 1]
+    if _ISAACLAB_INSTAB_LEGACY_TARGET_ANGLE:
+        walk_target_angle = torch.atan2(dx, dy)
+    else:
+        walk_target_angle = torch.atan2(dy, dx)
     angle_to_target = walk_target_angle - yaw
 
     return vel_loc, angvel_loc, roll, pitch, yaw, angle_to_target

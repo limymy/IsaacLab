@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import numpy as np
 import re
 
@@ -19,6 +20,21 @@ from isaaclab.sim.utils.stage import get_current_stage
 from isaaclab.utils.timer import Timer
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, default: int) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return bool(default)
+    try:
+        return bool(int(value))
+    except ValueError:
+        return bool(default)
+
+
+_ISAACLAB_INSTAB_CONTACT_SENSOR_PRUNE_NONCOLLIDING = _env_flag(
+    "ISAACLAB_INSTAB_CONTACT_SENSOR_PRUNE_NONCOLLIDING", default=1
+)
 
 
 def flipped_match(x: str, y: str) -> re.Match | None:
@@ -136,6 +152,30 @@ class NewtonManager:
             NewtonManager._model = NewtonManager._builder.finalize(device=NewtonManager._device)
             NewtonManager._model.set_gravity(NewtonManager._gravity_vector)
             NewtonManager._model.num_envs = NewtonManager._num_envs
+
+        # MuJoCo solver can populate native body accelerations (cacc -> State.body_qdd),
+        # but the attribute must be requested before allocating any State objects.
+        solver_cfg = getattr(NewtonManager._cfg, "solver_cfg", None)
+        solver_type = None
+        if solver_cfg is not None:
+            if hasattr(solver_cfg, "get"):
+                try:
+                    solver_type = solver_cfg.get("solver_type")
+                except TypeError:
+                    # Some config objects expose get() with a different signature.
+                    solver_type = None
+            if solver_type is None and hasattr(solver_cfg, "solver_type"):
+                solver_type = getattr(solver_cfg, "solver_type")
+            if solver_type is None:
+                try:
+                    solver_type = solver_cfg["solver_type"]
+                except Exception:
+                    solver_type = None
+        if solver_type is None:
+            solver_type = getattr(NewtonManager, "_solver_type", None)
+        if solver_type in ("mujoco_warp", "mujoco"):
+            NewtonManager._model.request_state_attributes("body_qdd")
+
         NewtonManager._state_0 = NewtonManager._model.state()
         NewtonManager._state_1 = NewtonManager._model.state()
         NewtonManager._state_temp = NewtonManager._model.state()
@@ -441,6 +481,7 @@ class NewtonManager:
             prune_noncolliding (bool): Make the force matrix sparse using the collision pairs in the model.
             verbose (bool): Whether to print verbose information.
         """
+        prune_noncolliding = _ISAACLAB_INSTAB_CONTACT_SENSOR_PRUNE_NONCOLLIDING
         if body_names_expr is None and shape_names_expr is None:
             raise ValueError("At least one of body_names_expr or shape_names_expr must be provided")
         if body_names_expr is not None and shape_names_expr is not None:

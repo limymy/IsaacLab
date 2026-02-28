@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import torch
 from typing import TYPE_CHECKING
 
@@ -16,6 +17,19 @@ from isaaclab.managers import SceneEntityCfg
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
+
+
+def _env_flag(name: str, default: int) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return bool(default)
+    try:
+        return bool(int(value))
+    except ValueError:
+        return bool(default)
+
+
+_ISAACLAB_INSTAB_LEGACY_TARGET_ANGLE = _env_flag("ISAACLAB_INSTAB_LEGACY_TARGET_ANGLE", default=0)
 
 
 # TODO: Clean this up
@@ -113,7 +127,10 @@ def base_angle_to_target(
     asset: Articulation = env.scene[asset_cfg.name]
     # compute desired heading direction
     to_target_pos = torch.tensor(target_pos, device=env.device) - wp.to_torch(asset.data.root_pos_w)[:, :3]
-    walk_target_angle = torch.atan2(to_target_pos[:, 1], to_target_pos[:, 0])
+    if _ISAACLAB_INSTAB_LEGACY_TARGET_ANGLE:
+        walk_target_angle = torch.atan2(to_target_pos[:, 0], to_target_pos[:, 1])
+    else:
+        walk_target_angle = torch.atan2(to_target_pos[:, 1], to_target_pos[:, 0])
     # compute base forward vector
     _, _, yaw = math_utils.euler_xyz_from_quat(wp.to_torch(asset.data.root_quat_w))
     # normalize angle to target to [-pi, pi]

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import os
 import torch
 from typing import TYPE_CHECKING
 
@@ -18,6 +19,19 @@ from isaaclab.sim.utils import safe_set_attribute_on_usd_prim
 
 if TYPE_CHECKING:
     from .cloner_cfg import TemplateCloneCfg
+
+
+def _env_flag(name: str, default: int) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return bool(default)
+    try:
+        return bool(int(value))
+    except ValueError:
+        return bool(default)
+
+
+_ISAACLAB_INSTAB_DISABLE_INVERSE_ENV_XFORM = _env_flag("ISAACLAB_INSTAB_DISABLE_INVERSE_ENV_XFORM", default=0)
 
 
 def clone_from_template(stage: Usd.Stage, num_clones: int, template_clone_cfg: TemplateCloneCfg) -> None:
@@ -300,7 +314,10 @@ def newton_replicate(
     for src_path in sources:
         p = ModelBuilder(up_axis=up_axis)
         solvers.SolverMuJoCo.register_custom_attributes(p)
-        inverse_env_xform = get_inverse_env_xform(stage, src_path)
+        if _ISAACLAB_INSTAB_DISABLE_INVERSE_ENV_XFORM:
+            inverse_env_xform = wp.transform((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+        else:
+            inverse_env_xform = get_inverse_env_xform(stage, src_path)
         p.add_usd(
             stage,
             root_path=src_path,
